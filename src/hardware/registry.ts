@@ -1,0 +1,75 @@
+export interface FastenerProfile {
+  id: string;
+  type: 'bolt' | 'heat_set_insert' | 'nut';
+  threadSize: string;
+  clearanceRadius: number;
+  headRadius?: number;
+  headDepth?: number;
+  insertTaperAngle?: number;
+  insertDepth?: number;
+}
+
+export const HARDWARE_REGISTRY: Record<string, FastenerProfile> = {
+  M3_SOCKET_CAP: {
+    id: 'm3_shcs',
+    type: 'bolt',
+    threadSize: 'M3',
+    clearanceRadius: 1.65,
+    headRadius: 2.85,
+    headDepth: 3.0,
+  },
+  M3_HEAT_SET_SHORT: {
+    id: 'm3_insert_short',
+    type: 'heat_set_insert',
+    threadSize: 'M3',
+    clearanceRadius: 2.0,
+    insertDepth: 4.0,
+    insertTaperAngle: 4.0,
+  },
+  M3_HEAT_SET_LONG: {
+    id: 'm3_insert_long',
+    type: 'heat_set_insert',
+    threadSize: 'M3',
+    clearanceRadius: 2.0,
+    insertDepth: 6.0,
+    insertTaperAngle: 4.0,
+  },
+  M3_NUT: {
+    id: 'm3_hex_nut',
+    type: 'nut',
+    threadSize: 'M3',
+    clearanceRadius: 3.3,
+  },
+  M4_SOCKET_CAP: {
+    id: 'm4_shcs',
+    type: 'bolt',
+    threadSize: 'M4',
+    clearanceRadius: 2.2,
+    headRadius: 3.65,
+    headDepth: 4.0,
+  },
+  M4_HEAT_SET_SHORT: {
+    id: 'm4_insert_short',
+    type: 'heat_set_insert',
+    threadSize: 'M4',
+    clearanceRadius: 2.7,
+    insertDepth: 5.0,
+    insertTaperAngle: 4.0,
+  },
+  M5_SOCKET_CAP: {
+    id: 'm5_shcs',
+    type: 'bolt',
+    threadSize: 'M5',
+    clearanceRadius: 2.7,
+    headRadius: 4.35,
+    headDepth: 5.0,
+  },
+  M5_HEAT_SET_SHORT: {
+    id: 'm5_insert_short',
+    type: 'heat_set_insert',
+    threadSize: 'M5',
+    clearanceRadius: 3.3,
+    insertDepth: 5.5,
+    insertTaperAngle: 4.0,
+  },
+};

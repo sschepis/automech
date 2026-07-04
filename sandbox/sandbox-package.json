@@ -1,0 +1,8 @@
+{
+  "name": "jscad-sandbox",
+  "private": true,
+  "type": "module",
+  "dependencies": {
+    "@jscad/io": "^2.4.3"
+  }
+}

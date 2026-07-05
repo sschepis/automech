@@ -3,3 +3,4 @@
 .kilo/
 tmp/
 .env
+node_modules/

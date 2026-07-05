@@ -1,1 +1,1 @@
-export { executeSandboxedCAD } from './executor.js';
+export { executeOpenSCAD, type ExecutionResult } from './executor.js';

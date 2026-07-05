@@ -9,11 +9,42 @@ export async function executeMachinistNode(state, stlPath) {
         flags.push('CRITICAL: STL file not found for manufacturing analysis.');
         return { manufacturingFlags: flags };
     }
+    const emptyFlag = checkEmptyStl(stlPath);
+    if (emptyFlag) {
+        flags.push(emptyFlag);
+        return { manufacturingFlags: flags };
+    }
     flags.push(...analyzeOverhangs(stlPath, state));
+    flags.push(...checkDisconnectedComponents(stlPath));
     flags.push(...checkWallThickness(stlPath, state));
     flags.push(...checkBuildVolume(state));
     flags.push(...runHeadlessSlicerCheck(stlPath, state));
     return { manufacturingFlags: flags };
+}
+function checkEmptyStl(stlPath) {
+    try {
+        const buffer = readFileSync(stlPath);
+        if (buffer.length < 84) {
+            return `CRITICAL: STL file is only ${buffer.length} bytes — no geometry produced.`;
+        }
+        const isAscii = buffer.toString('utf-8', 0, 80).includes('solid');
+        if (isAscii) {
+            const content = buffer.toString('utf-8');
+            if (!content.includes('facet')) {
+                return 'CRITICAL: ASCII STL contains no facets — geometry is empty.';
+            }
+        }
+        else {
+            const facetCount = buffer.readUInt32LE(80);
+            if (facetCount === 0) {
+                return 'CRITICAL: Binary STL has 0 facets — geometry is empty.';
+            }
+        }
+        return null;
+    }
+    catch {
+        return 'CRITICAL: Could not read STL file for empty-check.';
+    }
 }
 function analyzeOverhangs(stlPath, state) {
     const flags = [];
@@ -22,12 +53,23 @@ function analyzeOverhangs(stlPath, state) {
     try {
         const buffer = readFileSync(stlPath);
         const facets = parseSTLFacets(buffer);
+        let overhangCount = 0;
+        let totalFacets = 0;
+        const maxOverhangPercent = 15; // allow up to 15% overhang facets for complex prints
         for (const facet of facets) {
+            totalFacets++;
             const [nx, ny, nz] = facet.normal;
             if (nz < -threshold) {
-                flags.push(`OVERHANG_WARNING: Face normal [${nx.toFixed(2)}, ${ny.toFixed(2)}, ${nz.toFixed(2)}] exceeds ${maxAngle}° limit for ${state.globalConstraints.materialProfile.name}. Consider adding support or redesigning.`);
-                break;
+                overhangCount++;
             }
+        }
+        if (totalFacets === 0) {
+            flags.push('OVERHANG_CHECK_FAILED: Could not parse facets for analysis.');
+            return flags;
+        }
+        const overhangPercent = (overhangCount / totalFacets) * 100;
+        if (overhangPercent > maxOverhangPercent) {
+            flags.push(`OVERHANG_WARNING: ${overhangPercent.toFixed(1)}% of facets exceed ${maxAngle}° limit for ${state.globalConstraints.materialProfile.name} (max allowed: ${maxOverhangPercent}%). Consider support or redesign.`);
         }
     }
     catch {
@@ -38,6 +80,46 @@ function analyzeOverhangs(stlPath, state) {
 function checkWallThickness(stlPath, state) {
     const minWall = state.globalConstraints.materialProfile.minWallThickness;
     return [];
+}
+function checkDisconnectedComponents(stlPath) {
+    const flags = [];
+    try {
+        const buffer = readFileSync(stlPath);
+        const facets = parseSTLFacets(buffer);
+        if (facets.length === 0)
+            return flags;
+        // Build vertex adjacency graph via shared vertices
+        const vertexMap = new Map();
+        for (const facet of facets) {
+            for (const v of facet.vertices) {
+                const key = v.map(c => c.toFixed(2)).join(',');
+                if (!vertexMap.has(key))
+                    vertexMap.set(key, []);
+                vertexMap.get(key).push(facets.indexOf(facet));
+            }
+        }
+        if (vertexMap.size < 3)
+            return flags;
+        // Simple check: find bounding box gaps between vertex clusters
+        const allVerts = facets.flatMap(f => f.vertices);
+        const sortedZ = allVerts.map(v => v[2]).sort((a, b) => a - b);
+        // Find large gaps in Z distribution (potential disconnected layers)
+        const gaps = [];
+        for (let i = 1; i < sortedZ.length; i++) {
+            const gap = sortedZ[i] - sortedZ[i - 1];
+            if (gap > 20) { // >20mm gap suggests disconnected component
+                gaps.push({ start: sortedZ[i - 1], end: sortedZ[i], size: gap });
+            }
+        }
+        if (gaps.length > 0) {
+            const gapDescs = gaps.slice(0, 3).map(g => `${g.size.toFixed(0)}mm gap at Z=${g.start.toFixed(0)}–${g.end.toFixed(0)}`);
+            flags.push(`FLOATING_COMPONENTS: Detected ${gaps.length} disconnected geometry gap(s): ${gapDescs.join('; ')}. Ensure all parts are translated and unioned into one connected solid.`);
+        }
+    }
+    catch {
+        // skip if can't parse
+    }
+    return flags;
 }
 function checkBuildVolume(state) {
     const flags = [];

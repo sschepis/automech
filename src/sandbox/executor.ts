@@ -1,172 +1,99 @@
-import { spawn, execSync } from 'child_process';
-import { writeFileSync, mkdirSync, existsSync, unlinkSync } from 'fs';
-import { join } from 'path';
+import { writeFileSync, mkdirSync, existsSync } from 'fs';
+import { join, resolve } from 'path';
 import { randomUUID } from 'crypto';
-import { tmpdir } from 'os';
-import { pathToFileURL } from 'url';
-import type { SandboxResult } from '../types/pipeline.js';
+import { execSync } from 'child_process';
 
-const SANDBOX_IMAGE = 'jscad-sandbox';
-const EXECUTION_TIMEOUT_MS = 15000;
+const OUTPUT_DIR = resolve(process.cwd(), 'output');
 
-function isDockerAvailable(): boolean {
-  try {
-    execSync('docker info', { timeout: 5000, stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
+export interface ExecutionResult {
+  success: boolean;
+  runId: string;
+  stlPath?: string;
+  pngPaths?: string[];
+  error?: string;
 }
 
-function isSandboxImagePresent(): boolean {
-  try {
-    execSync(`docker image inspect ${SANDBOX_IMAGE}`, { timeout: 5000, stdio: 'ignore' });
-    return true;
-  } catch {
-    return false;
-  }
-}
+function findOpenscad(): string | null {
+  const paths = [
+    'openscad',
+    '/Applications/OpenSCAD.app/Contents/MacOS/OpenSCAD',
+    '/Applications/OpenSCAD-2021.01.app/Contents/MacOS/OpenSCAD',
+    '/usr/local/bin/openscad',
+  ];
 
-export async function executeSandboxedCAD(
-  runId: string,
-  cadCode: string,
-): Promise<SandboxResult> {
-  const hostWorkDir = join(tmpdir(), `automech_runs`, runId);
-  const projectTmpDir = join(process.cwd(), 'tmp');
-  const inputCodePath = join(hostWorkDir, 'draftsman_output.js');
-  const localInputPath = join(projectTmpDir, `${runId}.mjs`);
-  const outputStlPath = join(hostWorkDir, 'output.stl');
-
-  try {
-    mkdirSync(hostWorkDir, { recursive: true });
-    writeFileSync(inputCodePath, cadCode, 'utf-8');
-  } catch (err) {
-    return {
-      passed: false,
-      errorLog: `Failed to prepare work directory: ${err instanceof Error ? err.message : err}`,
-      flags: ['CRITICAL: Could not write sandbox input files.'],
-    };
-  }
-
-  if (!isDockerAvailable() || !isSandboxImagePresent()) {
+  for (const p of paths) {
     try {
-      mkdirSync(projectTmpDir, { recursive: true });
-      writeFileSync(localInputPath, cadCode, 'utf-8');
-    } catch (err) {
-      return {
-        passed: false,
-        errorLog: `Failed to write local sandbox file: ${err instanceof Error ? err.message : err}`,
-        flags: ['CRITICAL: Could not write sandbox input files.'],
-      };
-    }
-    return executeLocally(localInputPath, outputStlPath);
+      execSync(`test -x "${p}"`, { timeout: 1000, stdio: 'ignore' });
+      return p;
+    } catch { /* try next */ }
   }
 
-  return executeDocker(hostWorkDir, inputCodePath, outputStlPath);
-}
-
-function executeDocker(
-  hostWorkDir: string,
-  inputCodePath: string,
-  outputStlPath: string,
-): Promise<SandboxResult> {
-  return new Promise((resolve) => {
-    const sandbox = spawn('docker', [
-      'run',
-      '--rm',
-      '--network', 'none',
-      '--memory', '512m',
-      '--cpus', '1.0',
-      '-v', `${hostWorkDir}:/data`,
-      SANDBOX_IMAGE,
-      '/data/draftsman_output.js',
-      '/data/output.stl',
-    ], {
-      stdio: ['ignore', 'pipe', 'pipe'],
-    });
-
-    let stderr = '';
-    sandbox.stderr?.on('data', (data: Buffer) => {
-      stderr += data.toString('utf-8');
-    });
-
-    const timeout = setTimeout(() => {
-      sandbox.kill('SIGKILL');
-      resolve({
-        passed: false,
-        errorLog: 'EXECUTION_TIMEOUT: The generated geometry caused an infinite loop or exceeded complexity limits.',
-        flags: ['CRITICAL: Simplify boolean operations or reduce polygon count (segments).'],
-      });
-    }, EXECUTION_TIMEOUT_MS);
-
-    sandbox.on('close', (code) => {
-      clearTimeout(timeout);
-
-      if (code === 0 && existsSync(outputStlPath)) {
-        resolve({ passed: true, stlPath: outputStlPath, flags: [] });
-      } else if (code === 124) {
-        resolve({
-          passed: false,
-          errorLog: 'EXECUTION_TIMEOUT: In-sandbox timeout reached.',
-          flags: ['CRITICAL: Simplify boolean operations or reduce polygon count.'],
-        });
-      } else {
-        resolve({
-          passed: false,
-          errorLog: stderr || `Process exited with code ${code}`,
-          flags: ['ERROR: TypeScript compilation or JSCAD execution failed. Check syntax.'],
-        });
-      }
-    });
-
-    sandbox.on('error', (err) => {
-      clearTimeout(timeout);
-      resolve({
-        passed: false,
-        errorLog: `Sandbox spawn failed: ${err.message}`,
-        flags: ['CRITICAL: Docker sandbox could not be started. Is Docker running?'],
-      });
-    });
-  });
-}
-
-async function executeLocally(
-  inputCodePath: string,
-  outputStlPath: string,
-): Promise<SandboxResult> {
+  // Also try scanning for any OpenSCAD*.app
   try {
-    const fileUrl = pathToFileURL(inputCodePath).href;
-    const mod = await import(fileUrl);
+    const apps = execSync('ls /Applications/OpenSCAD*.app/Contents/MacOS/OpenSCAD 2>/dev/null', { encoding: 'utf-8', timeout: 2000, stdio: 'pipe' }).trim();
+    if (apps) return apps.split('\n')[0];
+  } catch { /* not found */ }
 
-    if (typeof mod.design !== 'function') {
-      return {
-        passed: false,
-        errorLog: 'Module must export a "design" function.',
-        flags: ['ERROR: Missing design() export.'],
-      };
-    }
+  return null;
+}
 
-    const geometry = mod.design();
+export async function executeOpenSCAD(
+  code: string,
+): Promise<ExecutionResult> {
+  const runId = randomUUID();
 
-    if (!geometry) {
-      return {
-        passed: false,
-        errorLog: 'design() returned null or undefined.',
-        flags: ['ERROR: Null geometry.'],
-      };
-    }
-
-    const io = await import('@jscad/io');
-    const stlData = io.solidsAsBlob(geometry, { format: 'stl' });
-
-    writeFileSync(outputStlPath, Buffer.from(stlData));
-
-    return { passed: true, stlPath: outputStlPath, flags: [] };
-  } catch (err) {
-    return {
-      passed: false,
-      errorLog: err instanceof Error ? err.message : String(err),
-      flags: ['ERROR: Local execution failed.'],
-    };
+  const openscad = findOpenscad();
+  if (!openscad) {
+    return { success: false, runId, error: 'OpenSCAD not found. Install it: brew install openscad' };
   }
+
+  const workDir = join(OUTPUT_DIR, runId);
+  mkdirSync(workDir, { recursive: true });
+
+  const scadPath = join(workDir, 'model.scad');
+  const stlPath = join(workDir, 'output.stl');
+
+  writeFileSync(scadPath, code, 'utf-8');
+
+  // Generate STL
+  try {
+    const result = execSync(`"${openscad}" -o "${stlPath}" --export-format binstl "${scadPath}"`, {
+      timeout: 60000,
+      encoding: 'utf-8',
+      stdio: 'pipe',
+    });
+
+    if (!existsSync(stlPath)) {
+      return { success: false, runId, error: 'OpenSCAD ran but produced no STL output.' };
+    }
+  } catch (err: any) {
+    const stdout = err?.stdout?.toString() ?? '';
+    const stderr = err?.stderr?.toString() ?? '';
+    const msg = (stderr || stdout || err?.message || 'unknown error').slice(0, 400);
+    return { success: false, runId, error: `OpenSCAD failed: ${msg}` };
+  }
+
+  // Generate renders from 2 angles
+  const pngPaths: string[] = [];
+  const views: Array<{ name: string; camera: string }> = [
+    { name: 'perspective', camera: '0,0,0,55,0,25,0' },
+    { name: 'top', camera: '0,0,0,0,0,100,0' },
+  ];
+
+  for (const view of views) {
+    const pngPath = join(workDir, `${view.name}.png`);
+    try {
+      execSync(
+        `"${openscad}" -o "${pngPath}" --render --imgsize=800,600 --viewall --autocenter --camera=${view.camera} "${scadPath}"`,
+        { timeout: 30000, stdio: 'pipe' },
+      );
+      if (existsSync(pngPath)) {
+        pngPaths.push(pngPath);
+      }
+    } catch {
+      // render failure is non-fatal — we still have the STL
+    }
+  }
+
+  return { success: true, runId, stlPath, pngPaths };
 }

@@ -1,6 +1,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { pathToFileURL } from 'url';
-import { resolve } from 'path';
+import { resolve, dirname } from 'path';
+import { fileURLToPath } from 'url';
 
 const [, , inputPath, outputPath] = process.argv;
 
@@ -23,6 +24,14 @@ const timeout = setTimeout(() => {
 }, timeoutMs);
 
 try {
+  const __dirname = dirname(fileURLToPath(import.meta.url));
+  const libPath = resolve(__dirname, 'automech-lib.js');
+
+  if (existsSync(libPath)) {
+    const lib = await import(pathToFileURL(libPath).href);
+    globalThis.automechLib = lib;
+  }
+
   const io = await import('@jscad/io');
   const absolutePath = resolve(inputPath);
   const fileUrl = pathToFileURL(absolutePath).href;

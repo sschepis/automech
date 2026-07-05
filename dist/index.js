@@ -1,7 +1,17 @@
 import { configDotenv } from 'dotenv';
 import { createDeepSeekClient } from './llm/deepseek.js';
+import { createOpenRouterClient } from './llm/openrouter.js';
 import { runPipeline } from './orchestrator/pipeline.js';
 configDotenv();
+function detectProvider() {
+    if (process.env.OPENROUTER_API_KEY) {
+        return { name: 'openrouter', createClient: () => createOpenRouterClient() };
+    }
+    if (process.env.DEEPSEEK_API_KEY) {
+        return { name: 'deepseek', createClient: () => createDeepSeekClient() };
+    }
+    throw new Error('No LLM API key found. Set OPENROUTER_API_KEY or DEEPSEEK_API_KEY in .env');
+}
 async function main() {
     const args = process.argv.slice(2);
     const command = args[0];
@@ -15,10 +25,14 @@ Usage:
   automech iterate <design-id>   Run a new iteration with empirical test data
 
 Environment:
-  DEEPSEEK_API_KEY    DeepSeek API key (loaded from .env)`);
+  OPENROUTER_API_KEY  OpenRouter API key (preferred)
+  DEEPSEEK_API_KEY    DeepSeek API key (fallback)
+  AUTOMECH_MODEL      Override model (default: deepseek/deepseek-chat)`);
         process.exit(0);
     }
-    const llmClient = createDeepSeekClient();
+    const provider = detectProvider();
+    console.log(`Using LLM provider: ${provider.name}`);
+    const llmClient = provider.createClient();
     switch (command) {
         case 'design': {
             const prompt = args.slice(1).join(' ');

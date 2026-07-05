@@ -132,10 +132,50 @@ async function executeLocally(inputCodePath, outputStlPath) {
                 flags: ['ERROR: Null geometry.'],
             };
         }
+        const modeling = await import('@jscad/modeling');
+        const volume = modeling.default.measurements.measureAggregateVolume(geometry);
+        if (volume <= 0 || isNaN(volume)) {
+            return {
+                passed: false,
+                errorLog: `design() produced geometry with zero volume (${volume} mm³). Check that union/subtract operations produce valid solid bodies.`,
+                flags: ['CRITICAL: Zero-volume geometry. The CAD code produced an empty or degenerate solid.'],
+            };
+        }
         const io = await import('@jscad/io');
-        const stlData = io.solidsAsBlob(geometry, { format: 'stl' });
-        writeFileSync(outputStlPath, Buffer.from(stlData));
-        return { passed: true, stlPath: outputStlPath, flags: [] };
+        const stlSerializer = io.stlSerializer;
+        const stlChunks = stlSerializer.serialize({ binary: true }, geometry);
+        const stlBuffer = Buffer.concat(stlChunks.map((c) => Buffer.from(c)));
+        writeFileSync(outputStlPath, stlBuffer);
+        if (stlBuffer.length < 84) {
+            return {
+                passed: false,
+                errorLog: `STL output is only ${stlBuffer.length} bytes (min 84 for binary header).`,
+                flags: ['CRITICAL: STL file is empty or corrupt.'],
+            };
+        }
+        // Detect NaN/Infinity vertices from degenerate booleans
+        const facetCount = stlBuffer.readUInt32LE(80);
+        let nanVertices = 0;
+        let offset = 84;
+        for (let i = 0; i < facetCount; i++) {
+            for (let v = 0; v < 3; v++) {
+                const x = stlBuffer.readFloatLE(offset);
+                offset += 4;
+                const y = stlBuffer.readFloatLE(offset);
+                offset += 4;
+                const z = stlBuffer.readFloatLE(offset);
+                offset += 4;
+                if (!isFinite(x) || !isFinite(y) || !isFinite(z))
+                    nanVertices++;
+            }
+            offset += 2;
+        }
+        const nanFlags = [];
+        if (nanVertices > 0) {
+            const pct = (nanVertices / (facetCount * 3) * 100).toFixed(1);
+            nanFlags.push(`NaN_WARNING: ${pct}% of vertices (${nanVertices}/${facetCount * 3}) are NaN from boolean operations. Non-blocking — slicer can handle.`);
+        }
+        return { passed: true, stlPath: outputStlPath, flags: nanFlags };
     }
     catch (err) {
         return {

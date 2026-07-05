@@ -50,6 +50,7 @@ export interface GlobalConstraints {
   targetPhysics?: TargetPhysics;
   fastenersRequired: string[];
   clearanceProfile: ClearanceProfile;
+  subParts?: SubPartConstraints[];
 }
 
 export interface TargetPhysics {
@@ -65,6 +66,16 @@ export interface ArchitectOutput {
   environmentalPhysics?: TargetPhysics;
   clarificationNeeded: string[];
   assemblyType?: 'single_part' | 'modular' | 'snap_fit' | 'bolt_together';
+  subParts?: SubPartConstraints[];
+}
+
+export interface SubPartConstraints {
+  name: string;
+  material: string;
+  boundingBox: [number, number, number];
+  fastenersRequired: string[];
+  role: 'rigid_body' | 'flex_interface' | 'bearing_surface' | 'seal' | 'insulator' | 'cosmetic' | 'structural';
+  targetPhysics?: TargetPhysics;
 }
 
 export interface SandboxResult {

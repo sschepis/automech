@@ -7,7 +7,7 @@ function getApiKey() {
     }
     return key;
 }
-async function deepseekRequest(messages, tools, toolChoice) {
+async function deepseekRequest(messages, tools) {
     const body = {
         model: DEEPSEEK_MODEL,
         messages,
@@ -16,7 +16,7 @@ async function deepseekRequest(messages, tools, toolChoice) {
     };
     if (tools && tools.length > 0) {
         body.tools = tools;
-        body.tool_choice = toolChoice ?? 'auto';
+        body.tool_choice = 'auto';
     }
     const response = await fetch(DEEPSEEK_BASE, {
         method: 'POST',
@@ -53,18 +53,13 @@ export function createDeepSeekClient() {
                 { role: 'system', content: systemPrompt },
                 { role: 'user', content: userPrompt },
             ];
-            const response = await deepseekRequest(messages, tools, {
-                type: 'function',
-                function: { name: functionName },
-            });
+            const response = await deepseekRequest(messages, tools);
             const choice = response.choices[0];
-            if (!choice) {
+            if (!choice)
                 throw new Error('DeepSeek returned no choices');
-            }
             const toolCalls = choice.message.tool_calls;
             if (toolCalls && toolCalls.length > 0) {
-                const parsed = JSON.parse(toolCalls[0].function.arguments);
-                return parsed;
+                return JSON.parse(toolCalls[0].function.arguments);
             }
             if (choice.message.content) {
                 const cleaned = choice.message.content
@@ -82,9 +77,8 @@ export function createDeepSeekClient() {
             ];
             const response = await deepseekRequest(messages);
             const choice = response.choices[0];
-            if (!choice) {
+            if (!choice)
                 throw new Error('DeepSeek returned no choices');
-            }
             return choice.message.content.trim();
         },
     };

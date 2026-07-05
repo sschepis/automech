@@ -6,7 +6,7 @@ import { evaluateEmpiricalFeedback } from '../nodes/technician.js';
 import { executeSandboxedCAD } from '../sandbox/executor.js';
 import { loadMaterialProfile } from '../profiles/materials.js';
 import { getClearanceProfile } from '../profiles/clearances.js';
-const MAX_ITERATIONS = 5;
+const MAX_ITERATIONS = 20;
 export async function runPipeline(llmClient, userPrompt, empiricalTest) {
     const errors = [];
     const architectResult = await executeArchitectNode(llmClient, userPrompt);
@@ -49,7 +49,7 @@ export async function runPipeline(llmClient, userPrompt, empiricalTest) {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration++) {
         state.iteration = iteration;
         const sandboxRunId = `iter_${iteration}_${Date.now()}`;
-        const code = await triggerDraftsmanNode(llmClient, state);
+        const code = await triggerDraftsmanNode(llmClient, state, userPrompt);
         state.proceduralCode = code;
         const sandboxResult = await executeSandboxedCAD(sandboxRunId, code);
         if (!sandboxResult.passed) {
